@@ -6,7 +6,7 @@ from conan.tools.microsoft import is_msvc
 from conan.tools.scm import Version
 import os
 
-required_conan_version = ">=1.47.0"
+required_conan_version = ">=2.1"
 
 
 class UncrustifyConan(ConanFile):
@@ -16,6 +16,7 @@ class UncrustifyConan(ConanFile):
     topics = "beautifier", "command-line"
     homepage = "https://github.com/uncrustify/uncrustify"
     url = "https://github.com/conan-io/conan-center-index"
+    package_type = "application"
     settings = "os", "arch", "compiler", "build_type"
 
     def layout(self):
@@ -29,13 +30,14 @@ class UncrustifyConan(ConanFile):
             raise ConanInvalidConfiguration(f"{self.ref} requires GCC >=7")
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         tc = CMakeToolchain(self)
         tc.variables["NoGitVersionString"] = True
         tc.variables["BUILD_TESTING"] = False
+        if Version(self.version) < "0.78.0":
+            tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
         tc.generate()
 
     def build(self):
@@ -65,9 +67,3 @@ class UncrustifyConan(ConanFile):
     def package_info(self):
         self.cpp_info.includedirs = []
         self.cpp_info.libdirs = []
-        self.cpp_info.resdirs = []
-
-        # TODO: to remove in conan v2
-        binpath = os.path.join(self.package_folder, "bin")
-        self.output.info(f"Adding to PATH: {binpath}")
-        self.env_info.PATH.append(binpath)

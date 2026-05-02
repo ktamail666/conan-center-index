@@ -1,9 +1,13 @@
-from conans import ConanFile, tools
+from conan import ConanFile
+from conan.tools.build import can_run
 
 
 class TestPackageConan(ConanFile):
     settings = "os", "arch", "compiler", "build_type"
 
+    def requirements(self):
+        self.requires(self.tested_reference_str)
+
     def test(self):
-        if not tools.cross_building(self):
-            self.run("ccache --version", run_environment=True)
+        if can_run(self):
+            self.run("ccache --version", env="conanrun")

@@ -11,10 +11,11 @@ required_conan_version = ">=1.53.0"
 class Bzip2Conan(ConanFile):
     name = "bzip2"
     url = "https://github.com/conan-io/conan-center-index"
-    homepage = "http://www.bzip.org"
-    license = "bzip2-1.0.8"
+    homepage = "https://sourceware.org/bzip2"
+    license = "bzip2-1.0.6" # SPDX license identifier for version 1.0.6 or newer
     description = "bzip2 is a free and open-source file compression program that uses the Burrows Wheeler algorithm."
     topics = ("data-compressor", "file-compression")
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -34,7 +35,6 @@ class Bzip2Conan(ConanFile):
     def config_options(self):
         if self.settings.os == "Windows":
             del self.options.fPIC
-        self.license = f"bzip2-{self.version}"
 
     def configure(self):
         if self.options.shared:
@@ -46,8 +46,7 @@ class Bzip2Conan(ConanFile):
         cmake_layout(self, src_folder="src")
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         tc = CMakeToolchain(self)
@@ -72,21 +71,19 @@ class Bzip2Conan(ConanFile):
         )
 
     def _create_cmake_module_variables(self, module_file):
-        content = textwrap.dedent("""\
+        content = textwrap.dedent(f"""\
             set(BZIP2_NEED_PREFIX TRUE)
             set(BZIP2_FOUND TRUE)
             if(NOT DEFINED BZIP2_INCLUDE_DIRS AND DEFINED BZip2_INCLUDE_DIRS)
-                set(BZIP2_INCLUDE_DIRS ${BZip2_INCLUDE_DIRS})
+                set(BZIP2_INCLUDE_DIRS ${{BZip2_INCLUDE_DIRS}})
             endif()
             if(NOT DEFINED BZIP2_INCLUDE_DIR AND DEFINED BZip2_INCLUDE_DIR)
-                set(BZIP2_INCLUDE_DIR ${BZip2_INCLUDE_DIR})
+                set(BZIP2_INCLUDE_DIR ${{BZip2_INCLUDE_DIR}})
             endif()
             if(NOT DEFINED BZIP2_LIBRARIES AND DEFINED BZip2_LIBRARIES)
-                set(BZIP2_LIBRARIES ${BZip2_LIBRARIES})
+                set(BZIP2_LIBRARIES ${{BZip2_LIBRARIES}})
             endif()
-            if(NOT DEFINED BZIP2_VERSION_STRING AND DEFINED BZip2_VERSION)
-                set(BZIP2_VERSION_STRING ${BZip2_VERSION})
-            endif()
+            set(BZIP2_VERSION_STRING "{self.version}")
         """)
         save(self, module_file, content)
 

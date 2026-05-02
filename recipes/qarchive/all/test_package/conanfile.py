@@ -1,8 +1,8 @@
 import os
 from conan import ConanFile
 from conan.tools.build import can_run
-from conan.tools.cmake import CMake
-from conan.tools.layout import cmake_layout
+from conan.tools.cmake import CMake, cmake_layout
+
 
 class TestPackageConan(ConanFile):
     settings = "os", "arch", "compiler", "build_type"
@@ -11,6 +11,9 @@ class TestPackageConan(ConanFile):
 
     def requirements(self):
         self.requires(self.tested_reference_str)
+
+    def build_requirements(self):
+        self.tool_requires("cmake/[>=3.16 <4]")
 
     def layout(self):
         cmake_layout(self)

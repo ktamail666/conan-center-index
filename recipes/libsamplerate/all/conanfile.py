@@ -6,7 +6,7 @@ from conan.tools.files import copy, get, replace_in_file, rmdir
 from conan.tools.scm import Version
 import os
 
-required_conan_version = ">=1.53.0"
+required_conan_version = ">=2.1"
 
 
 class LibsamplerateConan(ConanFile):
@@ -16,10 +16,11 @@ class LibsamplerateConan(ConanFile):
         "performing sample rate conversion of audio data."
     )
     license = "BSD-2-Clause"
-    topics = ("libsamplerate", "audio", "resample-audio-files")
+    topics = ("audio", "resample-audio-files")
     homepage = "https://github.com/libsndfile/libsamplerate"
     url = "https://github.com/conan-io/conan-center-index"
 
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -43,22 +44,10 @@ class LibsamplerateConan(ConanFile):
     def layout(self):
         cmake_layout(self, src_folder="src")
 
-    def _cmake_new_enough(self, required_version):
-        try:
-            import re
-            from io import StringIO
-            output = StringIO()
-            self.run("cmake --version", output=output)
-            m = re.search(r"cmake version (\d+\.\d+\.\d+)", output.getvalue())
-            return Version(m.group(1)) >= required_version
-        except:
-            return False
-
     def build_requirements(self):
         if is_apple_os(self) and self.options.shared and Version(self.version) >= "0.2.2":
             # see https://github.com/libsndfile/libsamplerate/blob/0.2.2/src/CMakeLists.txt#L110-L119
-            if not self._cmake_new_enough("3.17"):
-                self.tool_requires("cmake/3.25.1")
+            self.tool_requires("cmake/[>=3.17]")
 
     def source(self):
         get(self, **self.conan_data["sources"][self.version], strip_root=True)
@@ -67,9 +56,10 @@ class LibsamplerateConan(ConanFile):
         env = VirtualBuildEnv(self)
         env.generate()
         tc = CMakeToolchain(self)
-        tc.variables["LIBSAMPLERATE_EXAMPLES"] = False
-        tc.variables["LIBSAMPLERATE_INSTALL"] = True
-        tc.variables["BUILD_TESTING"] = False
+        tc.cache_variables["LIBSAMPLERATE_EXAMPLES"] = False
+        tc.cache_variables["LIBSAMPLERATE_INSTALL"] = True
+        tc.cache_variables["BUILD_TESTING"] = False
+        tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
         tc.generate()
 
     def _patch_sources(self):
@@ -99,11 +89,4 @@ class LibsamplerateConan(ConanFile):
         self.cpp_info.components["samplerate"].libs = ["samplerate"]
         if self.settings.os in ["Linux", "FreeBSD"]:
             self.cpp_info.components["samplerate"].system_libs.append("m")
-
-        # TODO: to remove in conan v2 once cmake_find_package* & pkg_config generators removed
-        self.cpp_info.names["cmake_find_package"] = "SampleRate"
-        self.cpp_info.names["cmake_find_package_multi"] = "SampleRate"
-        self.cpp_info.names["pkg_config"] = "samplerate"
-        self.cpp_info.components["samplerate"].names["cmake_find_package"] = "samplerate"
-        self.cpp_info.components["samplerate"].names["cmake_find_package_multi"] = "samplerate"
         self.cpp_info.components["samplerate"].set_property("cmake_target_name", "SampleRate::samplerate")

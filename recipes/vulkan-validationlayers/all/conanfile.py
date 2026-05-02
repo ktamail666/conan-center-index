@@ -1,9 +1,10 @@
-from conan import ConanFile
+from conan import ConanFile, conan_version
 from conan.errors import ConanException, ConanInvalidConfiguration
+from conan.tools.apple import fix_apple_shared_install_name
 from conan.tools.build import check_min_cppstd
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
-from conan.tools.env import Environment, VirtualBuildEnv
-from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get, mkdir, rename, replace_in_file, rm
+from conan.tools.env import VirtualBuildEnv
+from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get, mkdir, rename, replace_in_file, rm, save
 from conan.tools.gnu import PkgConfigDeps
 from conan.tools.scm import Version
 import functools
@@ -12,7 +13,7 @@ import os
 import shutil
 import yaml
 
-required_conan_version = ">=1.52.0"
+required_conan_version = ">=1.55.0"
 
 
 class VulkanValidationLayersConan(ConanFile):
@@ -22,14 +23,16 @@ class VulkanValidationLayersConan(ConanFile):
     topics = ("vulkan", "validation-layers")
     homepage = "https://github.com/KhronosGroup/Vulkan-ValidationLayers"
     url = "https://github.com/conan-io/conan-center-index"
-
+    package_type = "static-library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
+        "fPIC": [True, False],
         "with_wsi_xcb": [True, False],
         "with_wsi_xlib": [True, False],
         "with_wsi_wayland": [True, False],
     }
     default_options = {
+        "fPIC": True,
         "with_wsi_xcb": True,
         "with_wsi_xlib": True,
         "with_wsi_wayland": True,
@@ -52,7 +55,8 @@ class VulkanValidationLayersConan(ConanFile):
 
     @property
     def _needs_wayland_for_build(self):
-        return self.options.get_safe("with_wsi_wayland") and Version(self.version) < "1.3.231"
+        return (self.options.get_safe("with_wsi_wayland") and
+                (Version(self.version) < "1.3.231" or Version(self.version) >= "1.3.243.0"))
 
     @property
     def _needs_pkg_config(self):
@@ -69,7 +73,6 @@ class VulkanValidationLayersConan(ConanFile):
     @property
     def _compilers_minimum_version(self):
         return {
-            "11": {},
             "17": {
                 "apple-clang": "9",
                 "clang": "6",
@@ -77,7 +80,7 @@ class VulkanValidationLayersConan(ConanFile):
                 "msvc": "191",
                 "Visual Studio": "15.7",
             },
-        }[self._min_cppstd]
+        }.get(self._min_cppstd, {})
 
     def export(self):
         copy(self, f"dependencies/{self._dependencies_filename}", self.recipe_folder, self.export_folder)
@@ -90,19 +93,25 @@ class VulkanValidationLayersConan(ConanFile):
             del self.options.with_wsi_xcb
             del self.options.with_wsi_xlib
             del self.options.with_wsi_wayland
+        if self.settings.os == "Windows":
+            del self.options.fPIC
 
     def layout(self):
         cmake_layout(self, src_folder="src")
 
     def requirements(self):
         self.requires("robin-hood-hashing/3.11.5")
-        # TODO: set private=True, once the issue is resolved https://github.com/conan-io/conan/issues/9390
-        self.requires(self._require("spirv-tools"), private=not hasattr(self, "settings_build"))
-        self.requires(self._require("vulkan-headers"))
+        self.requires(self._require("spirv-headers"))
+        if Version(conan_version).major < "2":
+            # TODO: set private=True, once the issue is resolved https://github.com/conan-io/conan/issues/9390
+            self.requires(self._require("spirv-tools"), private=not hasattr(self, "settings_build"))
+        else:
+            self.requires(self._require("spirv-tools"))
+        self.requires(self._require("vulkan-headers"), transitive_headers=True)
         if self.options.get_safe("with_wsi_xcb") or self.options.get_safe("with_wsi_xlib"):
             self.requires("xorg/system")
         if self._needs_wayland_for_build:
-            self.requires("wayland/1.21.0")
+            self.requires("wayland/1.22.0")
 
     def _require(self, recipe_name):
         if recipe_name not in self._dependencies_versions:
@@ -119,8 +128,8 @@ class VulkanValidationLayersConan(ConanFile):
             min_length = min(len(lv1), len(lv2))
             return lv1[:min_length] < lv2[:min_length]
 
-        minimum_version = self._compilers_minimum_version.get(str(self.info.settings.compiler), False)
-        if minimum_version and loose_lt_semver(str(self.info.settings.compiler.version), minimum_version):
+        minimum_version = self._compilers_minimum_version.get(str(self.settings.compiler), False)
+        if minimum_version and loose_lt_semver(str(self.settings.compiler.version), minimum_version):
             raise ConanInvalidConfiguration(
                 f"{self.ref} requires C++{self._min_cppstd}, which your compiler does not support.",
             )
@@ -133,48 +142,57 @@ class VulkanValidationLayersConan(ConanFile):
 
     def build_requirements(self):
         if self._needs_pkg_config and not self.conf.get("tools.gnu:pkg_config", check_type=str):
-            self.tool_requires("pkgconf/1.9.3")
+            self.tool_requires("pkgconf/2.1.0")
+        if Version(self.version) >= "1.3.239":
+            self.tool_requires("cmake/[>=3.17.2 <4]")
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         env = VirtualBuildEnv(self)
         env.generate()
 
         tc = CMakeToolchain(self)
+        if Version(self.version) >= "1.3.239":
+            tc.cache_variables["VVL_CLANG_TIDY"] = False
         if Version(self.version) < "1.3.234":
             tc.variables["VULKAN_HEADERS_INSTALL_DIR"] = self.dependencies["vulkan-headers"].package_folder.replace("\\", "/")
         tc.variables["USE_CCACHE"] = False
         if self.settings.os in ["Linux", "FreeBSD"]:
-            tc.variables["BUILD_WSI_XCB_SUPPORT"] = self.options.with_wsi_xcb
-            tc.variables["BUILD_WSI_XLIB_SUPPORT"] = self.options.with_wsi_xlib
-            tc.variables["BUILD_WSI_WAYLAND_SUPPORT"] = self.options.with_wsi_wayland
+            tc.variables["BUILD_WSI_XCB_SUPPORT"] = self.options.get_safe("with_wsi_xcb")
+            tc.variables["BUILD_WSI_XLIB_SUPPORT"] = self.options.get_safe("with_wsi_xlib")
+            tc.variables["BUILD_WSI_WAYLAND_SUPPORT"] = self.options.get_safe("with_wsi_wayland")
+        elif self.settings.os == "Android":
+            tc.variables["BUILD_WSI_XCB_SUPPORT"] = False
+            tc.variables["BUILD_WSI_XLIB_SUPPORT"] = False
+            tc.variables["BUILD_WSI_WAYLAND_SUPPORT"] = False
         tc.variables["BUILD_WERROR"] = False
         tc.variables["BUILD_TESTS"] = False
         tc.variables["INSTALL_TESTS"] = False
         tc.variables["BUILD_LAYERS"] = True
         tc.variables["BUILD_LAYER_SUPPORT_FILES"] = True
+        tc.cache_variables["SPIRV-Tools-opt_DIR"] = self.generators_folder.replace("\\", "/")
         tc.generate()
 
         deps = CMakeDeps(self)
         deps.generate()
 
+        save(self, os.path.join(self.generators_folder, "SPIRV-Tools-optConfig.cmake"),
+             """include(CMakeFindDependencyMacro)
+             find_dependency(SPIRV-Tools)""")
+
         if self._needs_pkg_config:
             deps = PkgConfigDeps(self)
             deps.generate()
-            # TODO: to remove when properly handled by conan (see https://github.com/conan-io/conan/issues/11962)
-            env = Environment()
-            env.prepend_path("PKG_CONFIG_PATH", self.generators_folder)
-            env.vars(self).save_script("conanbuildenv_pkg_config_path")
 
     def _patch_sources(self):
         apply_conandata_patches(self)
         # Vulkan-ValidationLayers relies on Vulkan-Headers version from CMake config file
         # to set api_version in its manifest file, but this value MUST have format x.y.z (no extra number).
         # FIXME: find a way to force correct version in CMakeDeps of vulkan-headers recipe?
-        if Version(self.version) >= "1.3.235":
+        # NOTE: At version 1.3.239, the JSON_API_VERSION was removed from the cmakelists file, 
+        if Version(self.version) >= "1.3.235" and Version(self.version) < "1.3.239":
             vk_version = Version(self.dependencies["vulkan-headers"].ref.version)
             sanitized_vk_version = f"{vk_version.major}.{vk_version.minor}.{vk_version.patch}"
             replace_in_file(
@@ -182,13 +200,29 @@ class VulkanValidationLayersConan(ConanFile):
                 "set(JSON_API_VERSION ${VulkanHeaders_VERSION})",
                 f"set(JSON_API_VERSION \"{sanitized_vk_version}\")",
             )
-        # FIXME: two CMake module/config files should be generated (SPIRV-ToolsConfig.cmake and SPIRV-Tools-optConfig.cmake),
-        # but it can't be modeled right now in spirv-tools recipe
-        if not os.path.exists(os.path.join(self.generators_folder, "SPIRV-Tools-optConfig.cmake")):
-            shutil.copy(
-                os.path.join(self.generators_folder, "SPIRV-ToolsConfig.cmake"),
-                os.path.join(self.generators_folder, "SPIRV-Tools-optConfig.cmake"),
-            )
+        if self.settings.os == "Android":
+            # INFO: 1.3.236 tries to do `find_package(PkgConfig REQUIRED QUIET)` on Android, which fails the build
+            # https://github.com/KhronosGroup/Vulkan-ValidationLayers/blob/sdk-1.3.236/CMakeLists.txt#L148
+            if Version(self.version) < '1.3.238':
+                replace_in_file(self, os.path.join(self.source_folder, "CMakeLists.txt"),
+                            "(UNIX AND NOT APPLE)",
+                            "(UNIX AND NOT APPLE AND NOT ANDROID)")
+
+            # INFO: libVkLayer_utils.a: error: undefined symbol: __android_log_print
+            # https://github.com/KhronosGroup/Vulkan-ValidationLayers/commit/a26638ae9fdd8c40b56d4c7b72859a5b9a0952c9
+            if Version(self.version) < "1.3.239":
+                cmake_path = os.path.join(self.source_folder, "CMakeLists.txt")
+            else:
+                cmake_path = os.path.join(self.source_folder, "layers", "CMakeLists.txt")
+                # FIXME: Since 1.3.261.0 (https://github.com/KhronosGroup/Vulkan-ValidationLayers/pull/5913), we need to fix the line to be replaced
+                #        Check the patch for newer versions
+            replace_in_file(self, cmake_path, 
+                        "VkLayer_utils PUBLIC Vulkan::Headers",
+                        "VkLayer_utils PUBLIC Vulkan::Headers -landroid -llog")
+
+        if not self.options.get_safe("fPIC"):
+            replace_in_file(self, os.path.join(self.source_folder, "CMakeLists.txt"),
+                        "CMAKE_POSITION_INDEPENDENT_CODE ON", "CMAKE_POSITION_INDEPENDENT_CODE OFF")
 
     def build(self):
         self._patch_sources()
@@ -216,13 +250,28 @@ class VulkanValidationLayersConan(ConanFile):
             # Move json files to res, but keep in mind to preserve relative
             # path between module library and manifest json file
             rename(self, os.path.join(self.package_folder, "share"), os.path.join(self.package_folder, "res"))
+        fix_apple_shared_install_name(self)
 
     def package_info(self):
         self.cpp_info.libs = ["VkLayer_utils"]
 
         manifest_subfolder = "bin" if self.settings.os == "Windows" else os.path.join("res", "vulkan", "explicit_layer.d")
         vk_layer_path = os.path.join(self.package_folder, manifest_subfolder)
-        self.output.info(f"Prepending to VK_LAYER_PATH runtime environment variable: {vk_layer_path}")
         self.runenv_info.prepend_path("VK_LAYER_PATH", vk_layer_path)
+
+        # Update runtime discovery paths to allow libVkLayer_khronos_validation.{so,dll,dylib} to be discovered
+        # and loaded by vulkan-loader when the consumer executes
+        # This is necessary because this package exports a static lib to link against and a dynamic lib to load at runtime
+        runtime_lib_discovery_path = "LD_LIBRARY_PATH"
+        if self.settings.os == "Windows":
+            runtime_lib_discovery_path = "PATH"
+        if self.settings.os == "Macos":
+            runtime_lib_discovery_path = "DYLD_LIBRARY_PATH"
+        for libdir in [os.path.join(self.package_folder, libdir) for libdir in self.cpp_info.libdirs]:
+            self.runenv_info.prepend_path(runtime_lib_discovery_path, libdir)
+
         # TODO: to remove after conan v2, it allows to not break consumers still relying on virtualenv generator
         self.env_info.VK_LAYER_PATH.append(vk_layer_path)
+
+        if self.settings.os == "Android":
+            self.cpp_info.system_libs.extend(["android", "log"])

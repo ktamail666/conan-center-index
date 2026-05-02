@@ -2,19 +2,21 @@ from conan import ConanFile
 from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout
 from conan.tools.files import copy, get, rmdir
 from conan.tools.microsoft import is_msvc, is_msvc_static_runtime
+from conan.tools.scm import Version
 import os
 
-required_conan_version = ">=1.47.0"
+required_conan_version = ">=1.53.0"
 
 
 class JanssonConan(ConanFile):
     name = "jansson"
     description = "C library for encoding, decoding and manipulating JSON data"
-    topics = ("jansson", "json", "encoding", "decoding", "manipulation")
+    topics = ("json", "encoding", "decoding", "manipulation")
     url = "https://github.com/conan-io/conan-center-index"
     homepage = "http://www.digip.org/jansson/"
     license = "MIT"
 
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -35,22 +37,15 @@ class JanssonConan(ConanFile):
 
     def configure(self):
         if self.options.shared:
-            del self.options.fPIC
-        try:
-            del self.settings.compiler.libcxx
-        except Exception:
-            pass
-        try:
-            del self.settings.compiler.cppstd
-        except Exception:
-            pass
+            self.options.rm_safe("fPIC")
+        self.settings.rm_safe("compiler.cppstd")
+        self.settings.rm_safe("compiler.libcxx")
 
     def layout(self):
         cmake_layout(self, src_folder="src")
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         tc = CMakeToolchain(self)
@@ -62,6 +57,8 @@ class JanssonConan(ConanFile):
         tc.variables["USE_WINDOWS_CRYPTOAPI"] = self.options.use_windows_cryptoapi
         if is_msvc(self):
             tc.variables["JANSSON_STATIC_CRT"] = is_msvc_static_runtime(self)
+        if Version(self.version) <= "2.14.1":  # pylint: disable=conan-condition-evals-to-constant
+            tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
         tc.generate()
 
     def build(self):

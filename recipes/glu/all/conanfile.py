@@ -1,8 +1,9 @@
 from conan import ConanFile
+from conan.tools.apple import is_apple_os
 from conan.tools.gnu import PkgConfig
 from conan.tools.system import package_manager
 
-required_conan_version = ">=1.50.0"
+required_conan_version = ">=1.51.3"
 
 
 class SysConfigGLUConan(ConanFile):
@@ -13,18 +14,24 @@ class SysConfigGLUConan(ConanFile):
     url = "https://github.com/conan-io/conan-center-index"
     homepage = "https://cgit.freedesktop.org/mesa/glu/"
     license = "SGI-B-2.0"
+    package_type = "shared-library"
     settings = "os", "arch", "compiler", "build_type"
 
     def layout(self):
         pass
 
     def requirements(self):
-        self.requires("opengl/system")
+        # - glu headers include opengl headers
+        # - on Apple OS, glu is part of OpenGL framework, already managed by opengl recipe
+        self.requires("opengl/system", transitive_headers=True, transitive_libs=is_apple_os(self))
 
     def package_id(self):
         self.info.clear()
 
     def system_requirements(self):
+        if self.settings.os not in ["Linux", "FreeBSD", "SunOS"]:
+            return
+
         dnf = package_manager.Dnf(self)
         dnf.install(["mesa-libGLU-devel"], update=True, check=True)
 
@@ -43,6 +50,9 @@ class SysConfigGLUConan(ConanFile):
         pkg = package_manager.Pkg(self)
         pkg.install(["libGLU"], update=True, check=True)
 
+        pkg_util = package_manager.PkgUtil(self)
+        pkg_util.install(["mesalibs"], update=True, check=True)
+
     def package_info(self):
         self.cpp_info.bindirs = []
         self.cpp_info.includedirs = []
@@ -50,6 +60,6 @@ class SysConfigGLUConan(ConanFile):
 
         if self.settings.os == "Windows":
             self.cpp_info.system_libs = ["glu32"]
-        elif self.settings.os in ["Linux", "FreeBSD"]:
+        elif self.settings.os in ["Linux", "FreeBSD", "SunOS"]:
             pkg_config = PkgConfig(self, 'glu')
             pkg_config.fill_cpp_info(self.cpp_info, is_system=self.settings.os != "FreeBSD")

@@ -1,9 +1,13 @@
-from conan.tools.files import rename
-from conans import ConanFile, CMake, tools
-from conans.errors import ConanInvalidConfiguration
+from conan import ConanFile
+from conan.tools.build import check_min_cppstd
+from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
+from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get, rmdir
+from conan.tools.microsoft import is_msvc
+from conan.tools.scm import Version
+from conan.errors import ConanInvalidConfiguration
 import os
 
-required_conan_version = ">=1.43.0"
+required_conan_version = ">=2.1"
 
 
 class SociConan(ConanFile):
@@ -13,17 +17,14 @@ class SociConan(ConanFile):
     description = "The C++ Database Access Library "
     topics = ("mysql", "odbc", "postgresql", "sqlite3")
     license = "BSL-1.0"
-
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared":           [True, False],
         "fPIC":             [True, False],
         "empty":            [True, False],
         "with_sqlite3":     [True, False],
-        "with_db2":         [True, False],
         "with_odbc":        [True, False],
-        "with_oracle":      [True, False],
-        "with_firebird":    [True, False],
         "with_mysql":       [True, False],
         "with_postgresql":  [True, False],
         "with_boost":       [True, False],
@@ -33,169 +34,107 @@ class SociConan(ConanFile):
         "fPIC":             True,
         "empty":            False,
         "with_sqlite3":     False,
-        "with_db2":         False,
         "with_odbc":        False,
-        "with_oracle":      False,
-        "with_firebird":    False,
         "with_mysql":       False,
         "with_postgresql":  False,
         "with_boost":       False,
     }
 
-    generators = "cmake", "cmake_find_package"
-    _cmake = None
-
-    @property
-    def _source_subfolder(self):
-        return "source_subfolder"
-
-    @property
-    def _is_msvc(self):
-        return str(self.settings.compiler) in ["Visual Studio", "msvc"]
+    implements = ["auto_shared_fpic"]
 
     def export_sources(self):
-        self.copy("CMakeLists.txt")
-        for patch in self.conan_data.get("patches", {}).get(self.version, []):
-            self.copy(patch["patch_file"])
+        export_conandata_patches(self)
 
-    def config_options(self):
-        if self.settings.os == "Windows":
-            del self.options.fPIC
+    def layout(self):
+        cmake_layout(self, src_folder="src")
 
-    def configure(self):
-        if self.options.shared:
-            del self.options.fPIC
+    def build_requirements(self):
+        if Version(self.version) >= "4.1.0":
+            self.tool_requires("cmake/[>=3.23 <4]")
 
     def requirements(self):
+        # New versions will not need transitive_headers=True
         if self.options.with_sqlite3:
-            self.requires("sqlite3/3.38.0")
+            self.requires("sqlite3/[>=3.44 <4]", transitive_headers=True)
         if self.options.with_odbc and self.settings.os != "Windows":
-            self.requires("odbc/2.3.9")
+            self.requires("odbc/2.3.11", transitive_headers=True)
         if self.options.with_mysql:
-            self.requires("libmysqlclient/8.0.25")
+            self.requires("libmysqlclient/8.1.0", transitive_headers=True)
         if self.options.with_postgresql:
-            self.requires("libpq/13.4")
+            self.requires("libpq/[>=15.4 <18.0]", transitive_headers=True)
         if self.options.with_boost:
-            self.requires("boost/1.78.0")
-
-    @property
-    def _minimum_compilers_version(self):
-        return {
-            "Visual Studio": "14",
-            "gcc": "4.8",
-            "clang": "3.8",
-            "apple-clang": "8.0"
-        }
+            self.requires("boost/1.83.0", transitive_headers=True)
 
     def validate(self):
-        if self.settings.compiler.get_safe("cppstd"):
-            tools.check_min_cppstd(self, 11)
-
-        compiler = str(self.settings.compiler)
-        compiler_version = tools.Version(self.settings.compiler.version.value)
-        if compiler not in self._minimum_compilers_version:
-            self.output.warn("{} recipe lacks information about the {} compiler support.".format(self.name, self.settings.compiler))
-        elif compiler_version < self._minimum_compilers_version[compiler]:
-            raise ConanInvalidConfiguration("{} requires a {} version >= {}".format(self.name, compiler, compiler_version))
-
-        prefix  = "Dependencies for"
-        message = "not configured in this conan package."
-        if self.options.with_db2:
-            # self.requires("db2/0.0.0") # TODO add support for db2
-            raise ConanInvalidConfiguration("{} DB2 {} ".format(prefix, message))
-        if self.options.with_oracle:
-            # self.requires("oracle_db/0.0.0") # TODO add support for oracle
-            raise ConanInvalidConfiguration("{} ORACLE {} ".format(prefix, message))
-        if self.options.with_firebird:
-            # self.requires("firebird/0.0.0") # TODO add support for firebird
-            raise ConanInvalidConfiguration("{} firebird {} ".format(prefix, message))
+        if Version(self.version) < "4.1.0":
+            check_min_cppstd(self, 11)
+        else:
+            check_min_cppstd(self, 14)
 
     def source(self):
-        tools.get(**self.conan_data["sources"][self.version],
-                  destination=self._source_subfolder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
+        apply_conandata_patches(self)
 
-    def _patch_sources(self):
-        for patch in self.conan_data.get("patches", {}).get(self.version, []):
-            tools.patch(**patch)
-        cmakelists = os.path.join(self._source_subfolder, "CMakeLists.txt")
-        tools.replace_in_file(cmakelists,
-                              "set(CMAKE_MODULE_PATH ${SOCI_SOURCE_DIR}/cmake ${CMAKE_MODULE_PATH})",
-                              "list(APPEND CMAKE_MODULE_PATH ${SOCI_SOURCE_DIR}/cmake)")
-        tools.replace_in_file(cmakelists,
-                              "set(CMAKE_MODULE_PATH ${SOCI_SOURCE_DIR}/cmake/modules ${CMAKE_MODULE_PATH})",
-                              "list(APPEND CMAKE_MODULE_PATH ${SOCI_SOURCE_DIR}/cmake/modules)")
+    def generate(self):
+        tc = CMakeToolchain(self)
+        backend_prefix = "WITH" if Version(self.version) < "4.1.0" else "SOCI"
+        # MacOS @rpath
+        tc.cache_variables["CMAKE_POLICY_DEFAULT_CMP0042"] = "NEW"
+        tc.cache_variables["SOCI_SHARED"] = self.options.shared
+        tc.cache_variables["SOCI_STATIC"] = not self.options.shared
+        tc.cache_variables["SOCI_TESTS"] = False
+        tc.cache_variables["SOCI_EMPTY"] = self.options.empty
+        tc.cache_variables["SOCI_LTO"] = False
+        tc.cache_variables["{}_SQLITE3".format(backend_prefix)] = self.options.with_sqlite3
+        tc.cache_variables["{}_DB2".format(backend_prefix)] = False
+        tc.cache_variables["{}_ODBC".format(backend_prefix)] = self.options.with_odbc
+        tc.cache_variables["{}_ORACLE".format(backend_prefix)] = False
+        tc.cache_variables["{}_FIREBIRD".format(backend_prefix)] = False
+        tc.cache_variables["{}_MYSQL".format(backend_prefix)] = self.options.with_mysql
+        tc.cache_variables["{}_POSTGRESQL".format(backend_prefix)] = self.options.with_postgresql
+        tc.cache_variables["WITH_BOOST"] = self.options.with_boost
+        if Version(self.version) < "4.1.0": # pylint: disable=conan-condition-evals-to-constant
+            tc.cache_variables["SOCI_CXX11"] = True
+            tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
+        tc.generate()
 
-        # Remove hardcoded install_name_dir, it prevents relocatable shared lib on macOS
-        soci_backend_cmake = os.path.join(self._source_subfolder, "cmake", "SociBackend.cmake")
-        soci_core_cmake = os.path.join(self._source_subfolder, "src", "core", "CMakeLists.txt")
-        tools.replace_in_file(soci_backend_cmake, "INSTALL_NAME_DIR ${CMAKE_INSTALL_PREFIX}/lib", "")
-        tools.replace_in_file(soci_core_cmake, "INSTALL_NAME_DIR ${CMAKE_INSTALL_PREFIX}/lib", "")
-
-    def _configure_cmake(self):
-        if self._cmake:
-            return self._cmake
-
-        self._cmake = CMake(self)
-
-        self._cmake.definitions["SOCI_SHARED"]  = self.options.shared
-        self._cmake.definitions["SOCI_TESTS"]   = False
-        self._cmake.definitions["SOCI_CXX11"]   = True
-
-        if self.options.shared:
-            self._cmake.definitions["SOCI_STATIC"] = False
-
-        self._cmake.definitions["SOCI_EMPTY"]       = self.options.empty
-        self._cmake.definitions["WITH_SQLITE3"]     = self.options.with_sqlite3
-        self._cmake.definitions["WITH_DB2"]         = self.options.with_db2
-        self._cmake.definitions["WITH_ODBC"]        = self.options.with_odbc
-        self._cmake.definitions["WITH_ORACLE"]      = self.options.with_oracle
-        self._cmake.definitions["WITH_FIREBIRD"]    = self.options.with_firebird
-        self._cmake.definitions["WITH_MYSQL"]       = self.options.with_mysql
-        self._cmake.definitions["WITH_POSTGRESQL"]  = self.options.with_postgresql
-        self._cmake.definitions["WITH_BOOST"]       = self.options.with_boost
-
-        # Relocatable shared lib on macOS
-        self._cmake.definitions["CMAKE_POLICY_DEFAULT_CMP0042"] = "NEW"
-
-        self._cmake.configure()
-
-        return self._cmake
+        deps = CMakeDeps(self)
+        # libmysqlclient: handle different target names in versions 4.0.3 and 4.1.0
+        deps.set_property("libmysqlclient", "cmake_file_name", "mysql")
+        deps.set_property("libmysqlclient", "cmake_additional_variables_prefixes", ["MySQL", "MYSQL"])
+        deps.set_property("libmysqlclient", "cmake_target_name", "MySQL::MySQL")
+        deps.set_property("libpq", "cmake_file_name", "postgresql")
+        deps.set_property("libpq", "cmake_additional_variables_prefixes", ["POSTGRESQL"])
+        deps.set_property("sqlite3", "cmake_file_name", "SQLite3")
+        deps.set_property("sqlite3", "cmake_additional_variables_prefixes", ["SQLITE3"])
+        deps.generate()
 
     def build(self):
-        self._patch_sources()
-        cmake = self._configure_cmake()
+        cmake = CMake(self)
+        cmake.configure()
         cmake.build()
 
     def package(self):
-        self.copy("LICENSE_1_0.txt", dst="licenses", src=self._source_subfolder)
+        copy(self, "LICENSE_1_0.txt", dst=os.path.join(self.package_folder, "licenses"), src=self.source_folder)
 
-        cmake = self._configure_cmake()
+        cmake = CMake(self)
         cmake.install()
-        tools.rmdir(os.path.join(self.package_folder, "cmake"))
 
-        if os.path.isdir(os.path.join(self.package_folder, "lib64")):
-            if os.path.isdir(os.path.join(self.package_folder, "lib")):
-                self.copy("*", dst="lib", src="lib64", keep_path=False, symlinks=True)
-                tools.rmdir(os.path.join(self.package_folder, "lib64"))
-            else:
-                rename(self, os.path.join(self.package_folder, "lib64"), os.path.join(self.package_folder, "lib"))
-
-        os.remove(os.path.join(self.package_folder, "include", "soci", "soci-config.h.in"))
-        tools.rmdir(os.path.join(self.package_folder, "lib", "cmake"))
+        rmdir(self, os.path.join(self.package_folder, "lib", "cmake"))
 
     def package_info(self):
         self.cpp_info.set_property("cmake_file_name", "SOCI")
 
         target_suffix = "" if self.options.shared else "_static"
-        lib_prefix = "lib" if self._is_msvc and not self.options.shared else ""
-        version = tools.Version(self.version)
-        lib_suffix = "_{}_{}".format(version.major, version.minor) if self.settings.os == "Windows" else ""
+        version = Version(self.version)
+        lib_prefix = "lib" if version < "4.1.0" and is_msvc(self) and not self.options.shared else ""
+        lib_suffix = "_{}_{}".format(version.major, version.minor) if (version < "4.1.0" or self.options.shared) and self.settings.os == "Windows" else ""
 
         # soci_core
         self.cpp_info.components["soci_core"].set_property("cmake_target_name", "SOCI::soci_core{}".format(target_suffix))
         self.cpp_info.components["soci_core"].libs = ["{}soci_core{}".format(lib_prefix, lib_suffix)]
         if self.options.with_boost:
-            self.cpp_info.components["soci_core"].requires.append("boost::boost")
+            self.cpp_info.components["soci_core"].requires.append("boost::headers")
 
         # soci_empty
         if self.options.empty:
@@ -230,24 +169,3 @@ class SociConan(ConanFile):
             self.cpp_info.components["soci_postgresql"].set_property("cmake_target_name", "SOCI::soci_postgresql{}".format(target_suffix))
             self.cpp_info.components["soci_postgresql"].libs = ["{}soci_postgresql{}".format(lib_prefix, lib_suffix)]
             self.cpp_info.components["soci_postgresql"].requires = ["soci_core", "libpq::libpq"]
-
-        # TODO: to remove in conan v2 once cmake_find_package* generators removed
-        self.cpp_info.names["cmake_find_package"] = "SOCI"
-        self.cpp_info.names["cmake_find_package_multi"] = "SOCI"
-        self.cpp_info.components["soci_core"].names["cmake_find_package"] = "soci_core{}".format(target_suffix)
-        self.cpp_info.components["soci_core"].names["cmake_find_package_multi"] = "soci_core{}".format(target_suffix)
-        if self.options.empty:
-            self.cpp_info.components["soci_empty"].names["cmake_find_package"] = "soci_empty{}".format(target_suffix)
-            self.cpp_info.components["soci_empty"].names["cmake_find_package_multi"] = "soci_empty{}".format(target_suffix)
-        if self.options.with_sqlite3:
-            self.cpp_info.components["soci_sqlite3"].names["cmake_find_package"] = "soci_sqlite3{}".format(target_suffix)
-            self.cpp_info.components["soci_sqlite3"].names["cmake_find_package_multi"] = "soci_sqlite3{}".format(target_suffix)
-        if self.options.with_odbc:
-            self.cpp_info.components["soci_odbc"].names["cmake_find_package"] = "soci_odbc{}".format(target_suffix)
-            self.cpp_info.components["soci_odbc"].names["cmake_find_package_multi"] = "soci_odbc{}".format(target_suffix)
-        if self.options.with_mysql:
-            self.cpp_info.components["soci_mysql"].names["cmake_find_package"] = "soci_mysql{}".format(target_suffix)
-            self.cpp_info.components["soci_mysql"].names["cmake_find_package_multi"] = "soci_mysql{}".format(target_suffix)
-        if self.options.with_postgresql:
-            self.cpp_info.components["soci_postgresql"].names["cmake_find_package"] = "soci_postgresql{}".format(target_suffix)
-            self.cpp_info.components["soci_postgresql"].names["cmake_find_package_multi"] = "soci_postgresql{}".format(target_suffix)

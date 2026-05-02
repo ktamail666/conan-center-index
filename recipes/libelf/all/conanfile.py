@@ -8,7 +8,7 @@ from conan.tools.layout import basic_layout
 from conan.tools.microsoft import unix_path
 import os
 
-required_conan_version = ">=1.53.0"
+required_conan_version = ">=1.54.0"
 
 
 class LibelfConan(ConanFile):
@@ -18,7 +18,7 @@ class LibelfConan(ConanFile):
     homepage = "https://directory.fsf.org/wiki/Libelf"
     license = "LGPL-2.0"
     topics = ("elf", "fsf", "libelf", "object-file")
-
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -28,19 +28,18 @@ class LibelfConan(ConanFile):
         "shared": False,
         "fPIC": True,
     }
-
+    deprecated = "elfutils"
     exports_sources = "CMakeLists.txt"
-
-    @property
-    def _settings_build(self):
-        return getattr(self, "settings_build", self.settings)
 
     def config_options(self):
         if self.settings.os == "Windows":
             del self.options.fPIC
 
     def configure(self):
-        if self.options.shared:
+        if self.settings.os not in ["Linux", "FreeBSD", "Windows"]:
+            self.options.rm_safe("shared")
+            self.package_type = "static-library"
+        if self.options.get_safe("shared"):
             self.options.rm_safe("fPIC")
         self.settings.rm_safe("compiler.cppstd")
         self.settings.rm_safe("compiler.libcxx")
@@ -51,22 +50,17 @@ class LibelfConan(ConanFile):
         else:
             basic_layout(self, src_folder="src")
 
-    def validate(self):
-        if self.info.options.shared and self.info.settings.os not in ["Linux", "FreeBSD", "Windows"]:
-            raise ConanInvalidConfiguration("libelf can not be built as shared library on non linux/FreeBSD/windows platforms")
-
     def build_requirements(self):
         if self.settings.os != "Windows":
             self.tool_requires("autoconf/2.71")
             self.tool_requires("gnu-config/cci.20210814")
-            if self._settings_build.os == "Windows":
+            if self.settings_build.os == "Windows":
                 self.win_bash = True
                 if not self.conf.get("tools.microsoft.bash:path", check_type=str):
                     self.tool_requires("msys2/cci.latest")
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         if self.settings.os == "Windows":
@@ -112,10 +106,9 @@ class LibelfConan(ConanFile):
             cmake.install()
         else:
             autotools = Autotools(self)
-            # TODO: replace by autotools.install() once https://github.com/conan-io/conan/issues/12153 fixed
-            autotools.install(args=[f"DESTDIR={unix_path(self, self.package_folder)}"])
+            autotools.install()
             rmdir(self, os.path.join(self.package_folder, "lib", "locale"))
-            if self.options.shared:
+            if self.options.get_safe("shared"):
                 rm(self, "*.a", os.path.join(self.package_folder, "lib"))
             rmdir(self, os.path.join(self.package_folder, "lib", "pkgconfig"))
             rmdir(self, os.path.join(self.package_folder, "share"))

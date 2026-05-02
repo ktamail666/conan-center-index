@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.4)
+cmake_minimum_required(VERSION 3.15)
 project(quickjs C)
 
 option(USE_BIGNUM "Use bignum" ON)
@@ -41,6 +41,10 @@ set_target_properties(quickjs PROPERTIES
     PUBLIC_HEADER "${QUICKJS_INC}"
     WINDOWS_EXPORT_ALL_SYMBOLS ON
 )
+
+if(USE_BIGNUM)
+    target_compile_definitions(quickjs PRIVATE CONFIG_BIGNUM)
+endif()
 
 find_library(LIBM m)
 target_link_libraries(quickjs PRIVATE $<$<BOOL:${LIBM}>:${LIBM}>)

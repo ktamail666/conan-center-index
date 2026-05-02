@@ -1,10 +1,11 @@
 from conan import ConanFile
 from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout
-from conan.tools.files import apply_conandata_patches, collect_libs, copy, export_conandata_patches, get, rmdir
+from conan.tools.files import collect_libs, copy, get, rmdir
 from conan.tools.microsoft import is_msvc, is_msvc_static_runtime
+from conan.tools.scm import Version
 import os
 
-required_conan_version = ">=1.53.0"
+required_conan_version = ">=2"
 
 
 class ExpatConan(ConanFile):
@@ -14,20 +15,20 @@ class ExpatConan(ConanFile):
     url = "https://github.com/conan-io/conan-center-index"
     homepage = "https://github.com/libexpat/libexpat"
     topics = ("xml", "parsing")
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
         "fPIC": [True, False],
         "char_type": ["char", "wchar_t", "ushort"],
+        "large_size": [True, False],
     }
     default_options = {
         "shared": False,
         "fPIC": True,
         "char_type": "char",
+        "large_size": False,
     }
-
-    def export_sources(self):
-        export_conandata_patches(self)
 
     def config_options(self):
         if self.settings.os == "Windows":
@@ -42,8 +43,12 @@ class ExpatConan(ConanFile):
     def layout(self):
         cmake_layout(self, src_folder="src")
 
+    def build_requirements(self):
+        if Version(self.version) >= "2.7.4":
+            self.tool_requires("cmake/[>=3.17]")
+
     def source(self):
-        get(self, **self.conan_data["sources"][self.version], destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         tc = CMakeToolchain(self)
@@ -56,10 +61,10 @@ class ExpatConan(ConanFile):
         if is_msvc(self):
             tc.variables["EXPAT_MSVC_STATIC_CRT"] = is_msvc_static_runtime(self)
         tc.variables["EXPAT_BUILD_PKGCONFIG"] = False
+        tc.variables["EXPAT_LARGE_SIZE"] = self.options.large_size
         tc.generate()
 
     def build(self):
-        apply_conandata_patches(self)
         cmake = CMake(self)
         cmake.configure()
         cmake.build()
@@ -87,10 +92,8 @@ class ExpatConan(ConanFile):
             self.cpp_info.defines.append("XML_UNICODE")
         elif self.options.get_safe("char_type") == "wchar_t":
             self.cpp_info.defines.append("XML_UNICODE_WCHAR_T")
+        if self.options.large_size:
+            self.cpp_info.defines.append("XML_LARGE_SIZE")
 
         if self.settings.os in ["Linux", "FreeBSD"]:
             self.cpp_info.system_libs.append("m")
-
-        # TODO: to remove in conan v2
-        self.cpp_info.names["cmake_find_package"] = "EXPAT"
-        self.cpp_info.names["cmake_find_package_multi"] = "expat"

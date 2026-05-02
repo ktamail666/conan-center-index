@@ -4,7 +4,7 @@ from conan.tools.files import apply_conandata_patches, copy, export_conandata_pa
 import os
 import re
 
-required_conan_version = ">=1.53.0"
+required_conan_version = ">=2"
 
 
 class TermcapConan(ConanFile):
@@ -14,7 +14,7 @@ class TermcapConan(ConanFile):
     description = "Enables programs to use display terminals in a terminal-independent manner"
     license = "GPL-2.0-or-later"
     topics = ("terminal", "display", "text", "writing")
-
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -25,26 +25,18 @@ class TermcapConan(ConanFile):
         "fPIC": True,
     }
 
+    implements = ["auto_shared_fpic"]
+    languages = "C"
+
     def export_sources(self):
         copy(self, "CMakeLists.txt", src=self.recipe_folder, dst=self.export_sources_folder)
         export_conandata_patches(self)
-
-    def config_options(self):
-        if self.settings.os == "Windows":
-            del self.options.fPIC
-
-    def configure(self):
-        if self.options.shared:
-            self.options.rm_safe("fPIC")
-        self.settings.rm_safe("compiler.libcxx")
-        self.settings.rm_safe("compiler.cppstd")
 
     def layout(self):
         cmake_layout(self, src_folder="src")
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def _extract_sources(self):
         makefile_text = open(os.path.join(self.source_folder, "Makefile.in")).read()
@@ -96,4 +88,3 @@ class TermcapConan(ConanFile):
             self.cpp_info.defines = ["TERMCAP_SHARED"]
 
         self.runenv_info.define_path("TERMCAP", self._termcap_path)
-        self.env_info.TERMCAP = self._termcap_path

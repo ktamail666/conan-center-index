@@ -2,9 +2,10 @@ from conan import ConanFile
 from conan.tools.cmake import cmake_layout, CMake, CMakeToolchain
 from conan.tools.files import copy, get, apply_conandata_patches, export_conandata_patches
 from conan.tools.build import check_min_cppstd
+from conan.tools.scm import Version
 import os
 
-required_conan_version = ">=1.52.0"
+required_conan_version = ">=2.1"
 
 
 class PicobenchConan(ConanFile):
@@ -25,27 +26,30 @@ class PicobenchConan(ConanFile):
     def export_sources(self):
         export_conandata_patches(self)
 
-    def generate(self):
-        tc = CMakeToolchain(self)
-        tc.variables["PICOBENCH_BUILD_TOOLS"] = self.options.with_cli
-        tc.generate()
-
     def layout(self):
         cmake_layout(self, src_folder="src")
+
+    def package_id(self):
+        if self.info.options.with_cli:
+            del self.info.settings.compiler
+        else:
+            self.info.clear()
 
     def validate(self):
         if self.settings.compiler.cppstd:
             check_min_cppstd(self, 11)
 
-    def package_id(self):
-        if self.options.with_cli:
-            del self.info.settings.compiler
-        else:
-            self.info.clear()
-
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
+
+    def generate(self):
+        tc = CMakeToolchain(self)
+        tc.variables["PICOBENCH_BUILD_TOOLS"] = self.options.with_cli
+        tc.variables["PICOBENCH_BUILD_TESTS"] = False
+        tc.variables["PICOBENCH_BUILD_EXAMPLES"] = False
+        if Version(self.version) < "2.06": # pylint: disable=conan-condition-evals-to-constant
+            tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
+        tc.generate()
 
     def build(self):
         apply_conandata_patches(self)
@@ -60,12 +64,6 @@ class PicobenchConan(ConanFile):
         cmake.install()
 
     def package_info(self):
-        if self.options.with_cli:
-            # TODO: Legacy, to be removed on Conan 2.0
-            binpath = os.path.join(self.package_folder, "bin")
-            self.output.info("Appending PATH env var: {}".format(binpath))
-            self.env_info.PATH.append(binpath)
-
-        self.cpp_info.frameworkdirs = []
+        if not self.options.with_cli:
+            self.cpp_info.bindirs = []
         self.cpp_info.libdirs = []
-        self.cpp_info.resdirs = []

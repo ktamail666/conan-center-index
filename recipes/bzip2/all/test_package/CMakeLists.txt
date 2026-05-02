@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.15)
 project(test_package LANGUAGES C)
 
 find_package(BZip2 REQUIRED)
@@ -16,7 +16,7 @@ set(_custom_vars
     BZIP2_VERSION_STRING
 )
 foreach(_custom_var ${_custom_vars})
-    if(DEFINED _custom_var)
+    if(DEFINED ${_custom_var})
         message(STATUS "${_custom_var}: ${${_custom_var}}")
     else()
         message(FATAL_ERROR "${_custom_var} not defined")

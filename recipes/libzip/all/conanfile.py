@@ -1,21 +1,21 @@
 from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
-from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get, replace_in_file, rmdir
+from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get, rmdir
 from conan.tools.scm import Version
 import os
 
-required_conan_version = ">=1.53.0"
+required_conan_version = ">=1.54.0"
 
 
 class LibZipConan(ConanFile):
     name = "libzip"
     description = "A C library for reading, creating, and modifying zip archives"
+    license = "BSD-3-Clause"
     url = "https://github.com/conan-io/conan-center-index"
     homepage = "https://github.com/nih-at/libzip"
-    license = "BSD-3-Clause"
     topics = ("zip", "zip-archives", "zip-editing")
-
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -23,7 +23,7 @@ class LibZipConan(ConanFile):
         "with_bzip2": [True, False],
         "with_lzma": [True, False],
         "with_zstd": [True, False],
-        "crypto": [False, "win32", "openssl", "mbedtls"],
+        "crypto": [False, "win32", "openssl", "mbedtls", "gnutls"],
         "tools": [True, False],
     }
     default_options = {
@@ -47,7 +47,7 @@ class LibZipConan(ConanFile):
         if self.settings.os == "Windows":
             del self.options.fPIC
         if not self._has_zstd_support:
-            del self.options.zstd
+            del self.options.with_zstd
         # Default crypto backend on windows
         if self.settings.os == "Windows":
             self.options.crypto = "win32"
@@ -62,29 +62,31 @@ class LibZipConan(ConanFile):
         cmake_layout(self, src_folder="src")
 
     def requirements(self):
-        self.requires("zlib/1.2.13")
+        self.requires("zlib/[>=1.2.11 <2]")
 
         if self.options.with_bzip2:
             self.requires("bzip2/1.0.8")
 
         if self.options.with_lzma:
-            self.requires("xz_utils/5.2.5")
-
-        if self.options.get_safe("with_zstd"):
-            self.requires("zstd/1.5.2")
+            self.requires("xz_utils/[>=5.4.5 <6]")
 
         if self.options.crypto == "openssl":
-            self.requires("openssl/1.1.1s")
+            self.requires("openssl/[>=1.1 <4]")
         elif self.options.crypto == "mbedtls":
-            self.requires("mbedtls/3.2.1")
+            self.requires("mbedtls/3.5.0")
+        elif self.options.crypto == "gnutls":
+            self.requires("gnutls/3.8.2")
+
+        if self.options.get_safe("with_zstd"):
+            self.requires("zstd/[~1.5]")
 
     def validate(self):
-        if self.info.options.crypto == "win32" and self.info.settings.os != "Windows":
+        if self.options.crypto == "win32" and self.settings.os != "Windows":
             raise ConanInvalidConfiguration("Windows is required to use win32 crypto libraries")
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
+        apply_conandata_patches(self)
 
     def generate(self):
         tc = CMakeToolchain(self)
@@ -94,56 +96,28 @@ class LibZipConan(ConanFile):
         tc.variables["BUILD_DOC"] = False
         tc.variables["ENABLE_LZMA"] = self.options.with_lzma
         tc.variables["ENABLE_BZIP2"] = self.options.with_bzip2
+        if (self.settings.compiler == "gcc"
+                and Version(self.settings.compiler.version) >= "14"
+                and Version(self.version) < "1.11"):
+            # See https://github.com/conan-io/conan-center-index/issues/26034
+            # It's an error in gcc >= 14
+            # Upstream fixed this silencing this error implicitly from 1.11
+            tc.extra_cflags.append("-Wno-incompatible-pointer-types")
         if self._has_zstd_support:
             tc.variables["ENABLE_ZSTD"] = self.options.with_zstd
         tc.variables["ENABLE_COMMONCRYPTO"] = False  # TODO: We need CommonCrypto package
-        tc.variables["ENABLE_GNUTLS"] = False  # TODO: We need GnuTLS package
+        tc.variables["ENABLE_GNUTLS"] = self.options.crypto == "gnutls"
         tc.variables["ENABLE_MBEDTLS"] = self.options.crypto == "mbedtls"
         tc.variables["ENABLE_OPENSSL"] = self.options.crypto == "openssl"
         tc.variables["ENABLE_WINDOWS_CRYPTO"] = self.options.crypto == "win32"
-        # Honor BUILD_SHARED_LIBS from conan_toolchain (see https://github.com/conan-io/conan/issues/11840)
-        tc.cache_variables["CMAKE_POLICY_DEFAULT_CMP0077"] = "NEW"
+        if Version(self.version) < "1.10":
+            tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
         tc.generate()
 
         deps = CMakeDeps(self)
         deps.generate()
 
-    def _patch_sources(self):
-        apply_conandata_patches(self)
-
-        top_cmakelists = os.path.join(self.source_folder, "CMakeLists.txt")
-        # Honor zstd enabled
-        if self._has_zstd_support:
-            def zstd_find_package_pattern(version):
-                if version >= "1.9.2":
-                    return "find_package(Zstd 1.3.6)"
-                else:
-                    return "find_package(Zstd)"
-            lib_cmakelists = os.path.join(self.source_folder, "lib", "CMakeLists.txt")
-            replace_in_file(self, top_cmakelists, zstd_find_package_pattern(Version(self.version)), "find_package(zstd)")
-            replace_in_file(self, top_cmakelists, "Zstd_FOUND", "zstd_FOUND")
-            replace_in_file(
-                self,
-                lib_cmakelists,
-                "Zstd::Zstd",
-                "$<IF:$<TARGET_EXISTS:zstd::libzstd_shared>,zstd::libzstd_shared,zstd::libzstd_static>",
-            )
-        # Do not pollute rpath of installed binaries
-        replace_in_file(
-            self,
-            top_cmakelists,
-            "set(CMAKE_INSTALL_RPATH ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR})",
-            "",
-        )
-        replace_in_file(
-            self,
-            top_cmakelists,
-            "set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)",
-            "",
-        )
-
     def build(self):
-        self._patch_sources()
         cmake = CMake(self)
         cmake.configure()
         cmake.build()
@@ -167,11 +141,6 @@ class LibZipConan(ConanFile):
             if self.options.crypto == "win32":
                 self.cpp_info.components["_libzip"].system_libs.append("bcrypt")
 
-        # TODO: to remove in conan v2 once cmake_find_package* generators removed
-        self.cpp_info.names["cmake_find_package"] = "libzip"
-        self.cpp_info.names["cmake_find_package_multi"] = "libzip"
-        self.cpp_info.components["_libzip"].names["cmake_find_package"] = "zip"
-        self.cpp_info.components["_libzip"].names["cmake_find_package_multi"] = "zip"
         self.cpp_info.components["_libzip"].set_property("cmake_target_name", "libzip::zip")
         self.cpp_info.components["_libzip"].set_property("pkg_config_name", "libzip")
         self.cpp_info.components["_libzip"].requires = ["zlib::zlib"]
@@ -185,5 +154,5 @@ class LibZipConan(ConanFile):
             self.cpp_info.components["_libzip"].requires.append("openssl::crypto")
         elif self.options.crypto == "mbedtls":
             self.cpp_info.components["_libzip"].requires.append("mbedtls::mbedtls")
-        if self.options.tools:
-            self.env_info.PATH.append(os.path.join(self.package_folder, "bin"))
+        elif self.options.crypto == "gnutls":
+            self.cpp_info.components["_libzip"].requires.append("gnutls::gnutls")

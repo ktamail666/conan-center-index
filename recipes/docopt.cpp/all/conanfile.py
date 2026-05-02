@@ -48,7 +48,7 @@ class DocoptCppConan(ConanFile):
 
     def requirements(self):
         if self.options.boost_regex:
-            self.requires("boost/1.81.0")
+            self.requires("boost/1.83.0")
 
     def validate(self):
         if self.settings.compiler.get_safe("cppstd"):
@@ -59,6 +59,7 @@ class DocoptCppConan(ConanFile):
 
     def generate(self):
         tc = CMakeToolchain(self)
+        tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5"
         tc.variables["USE_BOOST_REGEX"] = self.options.boost_regex
         tc.generate()
 

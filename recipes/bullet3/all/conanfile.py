@@ -8,7 +8,7 @@ import glob
 import os
 import textwrap
 
-required_conan_version = ">=1.50.0"
+required_conan_version = ">=2"
 
 
 class Bullet3Conan(ConanFile):
@@ -22,6 +22,7 @@ class Bullet3Conan(ConanFile):
     license = "ZLIB"
     url = "https://github.com/conan-io/conan-center-index"
 
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -48,24 +49,17 @@ class Bullet3Conan(ConanFile):
 
     short_paths = True
 
-    def config_options(self):
-        if self.settings.os == "Windows":
-            del self.options.fPIC
-
-    def configure(self):
-        if self.options.shared:
-            del self.options.fPIC
-
-    def validate(self):
-        if is_msvc(self) and self.info.options.shared:
-            raise ConanInvalidConfiguration("Shared libraries on Visual Studio not supported")
+    implements = ["auto_shared_fpic"]
 
     def layout(self):
         cmake_layout(self, src_folder="src")
 
+    def validate(self):
+        if is_msvc(self) and self.options.shared:
+            raise ConanInvalidConfiguration("Shared libraries on Visual Studio not supported")
+
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         tc = CMakeToolchain(self)
@@ -84,11 +78,8 @@ class Bullet3Conan(ConanFile):
         tc.variables["BUILD_UNIT_TESTS"] = False
         if is_msvc(self):
             tc.variables["USE_MSVC_RUNTIME_LIBRARY_DLL"] = not is_msvc_static_runtime(self)
-        # Honor BUILD_SHARED_LIBS from conan_toolchain (see https://github.com/conan-io/conan/issues/11840)
-        tc.cache_variables["CMAKE_POLICY_DEFAULT_CMP0077"] = "NEW"
-        if Version(self.version) < "3.21":
-            # silence warning
-            tc.cache_variables["CMAKE_POLICY_DEFAULT_CMP0115"] = "OLD"
+        if Version(self.version) <= "3.25":
+            tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5"  # CMake 4 support
         tc.generate()
 
     def build(self):
@@ -182,19 +173,11 @@ class Bullet3Conan(ConanFile):
         ])
         if self.settings.os == "Windows" and self.settings.build_type in ("Debug", "MinSizeRel", "RelWithDebInfo"):
             lib_suffix = "RelWithDebugInfo" if self.settings.build_type == "RelWithDebInfo" else self.settings.build_type
-            libs = [lib + "_{}".format(lib_suffix) for lib in libs]
+            libs = [f"{lib}_{lib_suffix}" for lib in libs]
 
         self.cpp_info.libs = libs
         self.cpp_info.includedirs = ["include", os.path.join("include", "bullet")]
-        if self.options.extras:
-            self.cpp_info.includedirs.append(os.path.join("include", "bullet_robotics"))
         self.cpp_info.defines = self._bullet_definitions
         if self.options.bt2_thread_locks and self.settings.os in ["Linux", "FreeBSD"]:
             self.cpp_info.system_libs.append("pthread")
 
-        # TODO: to remove in conan v2 once cmake_find_package* generators removed
-        self.cpp_info.names["cmake_find_package"] = "Bullet"
-        self.cpp_info.names["cmake_find_package_multi"] = "Bullet"
-        self.cpp_info.build_modules["cmake_find_package"] = [self._module_file_rel_path]
-        self.cpp_info.build_modules["cmake_find_package_multi"] = [self._module_file_rel_path]
-        self.cpp_info.names["pkg_config"] = "bullet"

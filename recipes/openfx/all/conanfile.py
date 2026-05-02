@@ -1,88 +1,82 @@
-from conans import ConanFile, CMake, tools
+from conan import ConanFile
+from conan.tools.build import check_min_cppstd
+from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
+from conan.tools.files import copy, get, export_conandata_patches, apply_conandata_patches
 import os
 
+required_conan_version = ">=2.1"
 
-class openfx(ConanFile):
+
+class Openfx(ConanFile):
     name = "openfx"
     license = "BSD-3-Clause"
+    description = "OpenFX image processing plug-in standard"
     url = "https://github.com/conan-io/conan-center-index"
-    homepage = "http://openeffects.org"
-    description = "OpenFX image processing plug-in standard."
-    topics = ("image-processing", "standard")
+    homepage = "https://github.com/AcademySoftwareFoundation/openfx"
+    topics = ("graphics", "vfx", "image-processing", "plugins")
+    package_type = "static-library"
 
-    settings = "os", "arch", "compiler", "build_type"
     options = {
         "fPIC": [True, False],
-        "shared": [True, False],
     }
+
+    settings = "os", "arch", "compiler", "build_type"
     default_options = {
         "fPIC": True,
-        "shared": False,
+        # "expat/*:shared": True,
     }
-    requires = ("opengl/system", "expat/2.4.8")
-    exports_sources = "CMakeLists.txt", "cmake/*", "symbols/*"
-
-    generators = "cmake", "cmake_find_package"
-    _cmake = None
-
-    def source(self):
-        tools.get(
-            **self.conan_data["sources"][self.version],
-            destination="source_subfolder",
-            strip_root=True
-        )
-
-    def configure(self):
-        if self.options.shared:
-            del self.options.fPIC
 
     def config_options(self):
         if self.settings.os == "Windows":
             del self.options.fPIC
 
-    def _configure_cmake(self):
-        if self._cmake:
-            return self._cmake
-        self._cmake = CMake(self)
-        self._cmake.configure()
-        return self._cmake
+    def export_sources(self):
+        export_conandata_patches(self)
+
+    def source(self):
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
+        apply_conandata_patches(self)
+
+    def requirements(self):
+        # Symbols used in public headers
+        self.requires("expat/[>=2.6.2 <3]", transitive_headers=True)
+
+    def build_requirements(self):
+        self.tool_requires("cmake/[>=3.16]")
+
+    def validate(self):
+        check_min_cppstd(self, 17)
+
+    def layout(self):
+        cmake_layout(self, src_folder="src")
+
+    def generate(self):
+        deps = CMakeDeps(self)
+        deps.generate()
+
+        tc = CMakeToolchain(self)
+        tc.generate()
 
     def build(self):
-        cmake = self._configure_cmake()
+        cmake = CMake(self)
+        cmake.configure()
         cmake.build()
 
-    @property
-    def _build_modules(self):
-        return [os.path.join("lib", "cmake", "OpenFX.cmake")]
-
     def package(self):
-        cmake = self._configure_cmake()
-
-        tools.rmdir(os.path.join(self.package_folder, "lib", "cmake"))
-        tools.rmdir(os.path.join(self.package_folder, "lib", "pkgconfig"))
-
+        copy(self, "LICENSE.md", src=self.source_folder, dst=os.path.join(self.package_folder, "licenses"))
+        cmake = CMake(self)
         cmake.install()
 
-        self.copy("*.symbols", src="symbols", dst="lib/symbols")
-        self.copy("*.cmake", src="cmake", dst="lib/cmake")
-        self.copy("LICENSE", src="source_subfolder/Support", dst="licenses")
-        self.copy("readme.md")
-
     def package_info(self):
-        self.cpp_info.names["cmake_find_package"] = "openfx"
-        self.cpp_info.names["cmake_find_package_multi"] = "openfx"
+        self.cpp_info.set_property("cmake_build_modules", [os.path.join("lib", "cmake", "OpenFX", "OpenFX.cmake")])
 
-        self.cpp_info.set_property("cmake_build_modules", self._build_modules)
-        self.cpp_info.builddirs.append(os.path.join("lib", "cmake"))
-        self.cpp_info.build_modules["cmake_find_package"] = self._build_modules
-        self.cpp_info.build_modules["cmake_find_package_multi"] = self._build_modules
+        self.cpp_info.components["Api"].includedirs = ["include"]
+        self.cpp_info.components["HostSupport"].libs = ["OfxHost"]
+        self.cpp_info.components["HostSupport"].includedirs = [os.path.join("include", "HostSupport")]
+        self.cpp_info.components["HostSupport"].requires = ["Api", "expat::expat"]
+        self.cpp_info.components["Support"].libs = ["OfxSupport"]
+        self.cpp_info.components["Support"].includedirs = [os.path.join("include", "Support")]
+        self.cpp_info.components["Support"].requires = ["Api"]
 
-        if self.options.shared:
-            self.cpp_info.libs = ["OfxSupport"]
-        else:
-            self.cpp_info.libs = ["OfxHost", "OfxSupport"]
-
-        if self.settings.os in ("Linux", "FreeBSD"):
-            self.cpp_info.system_libs.extend(["GL"])
-        if self.settings.os == "Macos":
-            self.cpp_info.frameworks = ["CoreFoundation", "OpenGL"]
+        if self.settings.os in ["Linux", "FreeBSD"]:
+            self.cpp_info.components["HostSupport"].system_libs = ["dl"]

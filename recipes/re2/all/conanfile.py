@@ -1,55 +1,76 @@
 from conan import ConanFile
+from conan.errors import ConanInvalidConfiguration
 from conan.tools.build import check_min_cppstd
-from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout
+from conan.tools.cmake import CMake, CMakeToolchain, CMakeDeps, cmake_layout
 from conan.tools.files import copy, get, rmdir
+from conan.tools.scm import Version
 import os
 
-required_conan_version = ">=1.53.0"
-
+required_conan_version = ">=2.1"
 
 class Re2Conan(ConanFile):
     name = "re2"
     description = "Fast, safe, thread-friendly regular expression library"
-    topics = ("regex")
+    topics = ("regex",)
     url = "https://github.com/conan-io/conan-center-index"
     homepage = "https://github.com/google/re2"
     license = "BSD-3-Clause"
 
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
         "fPIC": [True, False],
+        "with_icu": [True, False],
     }
     default_options = {
         "shared": False,
         "fPIC": True,
+        "with_icu": False,
     }
 
-    def config_options(self):
-        if self.settings.os == "Windows":
-            del self.options.fPIC
-
-    def configure(self):
-        if self.options.shared:
-            self.options.rm_safe("fPIC")
+    implements = ["auto_shared_fpic"]
 
     def layout(self):
         cmake_layout(self, src_folder="src")
 
+    def requirements(self):
+        if self.options.get_safe("with_icu"):
+            self.requires("icu/73.2")
+        if Version(self.version) >= "20251105":
+            self.requires("abseil/[>=20240116.1 <=20260107.1]", transitive_headers=True)
+        elif Version(self.version) >= "20230601":
+            # 20250127.0 is the most recent abseil version that supports C++14
+            self.requires("abseil/[>=20240116.1 <=20250127.0]", transitive_headers=True)
+
     def validate(self):
-        if self.info.settings.compiler.get_safe("cppstd"):
-            check_min_cppstd(self, 11)
+        if Version(self.version) >= "20250805":
+            min_cppstd = 17
+        elif Version(self.version) >= "20230601":
+            min_cppstd = 14
+        else:
+            min_cppstd = 11
+        check_min_cppstd(self, min_cppstd)
+
+        if "abseil" in self.dependencies.host:
+            abseil_cppstd = self.dependencies.host['abseil'].info.settings.compiler.cppstd
+            if abseil_cppstd != self.settings.compiler.cppstd:
+                raise ConanInvalidConfiguration(f"re2 and abseil must be built with the same compiler.cppstd setting")
+
+    def build_requirements(self):
+        if Version(self.version) >= "20250805":
+            self.tool_requires("cmake/[>=3.22]")
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         tc = CMakeToolchain(self)
         tc.variables["RE2_BUILD_TESTING"] = False
-        # Honor BUILD_SHARED_LIBS from conan_toolchain (see https://github.com/conan-io/conan/issues/11840)
-        tc.cache_variables["CMAKE_POLICY_DEFAULT_CMP0077"] = "NEW"
         tc.generate()
+
+        deps = CMakeDeps(self)
+        deps.generate()
 
     def build(self):
         cmake = CMake(self)

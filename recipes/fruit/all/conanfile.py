@@ -3,13 +3,14 @@ import shutil
 import tarfile
 from fnmatch import fnmatch
 
-from conan import ConanFile, Version
-from conan.errors import ConanInvalidConfiguration
+from conan import ConanFile
+from conan.errors import ConanInvalidConfiguration, ConanException
 from conan.tools.build import check_min_cppstd
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
 from conan.tools.files import apply_conandata_patches, copy, download, export_conandata_patches, get
+from conan.tools.scm import Version
 
-required_conan_version = ">=1.53.0"
+required_conan_version = ">=2.1"
 
 
 class FruitConan(ConanFile):
@@ -19,16 +20,18 @@ class FruitConan(ConanFile):
     homepage = "https://github.com/google/fruit"
     license = "Apache-2.0"
     topics = ("injection", "framework")
-    settings = "os", "compiler", "build_type", "arch"
-    options = {"shared": [True, False],
-               "use_boost": [True, False, "deprecated"],
-               "with_boost": [True, False],
-               "fPIC": [True, False]}
+    package_type = "library"
+    settings = "os", "arch", "compiler", "build_type"
+    options = {
+        "shared": [True, False],
+        "fPIC": [True, False],
+        "with_boost": [True, False],
+    }
     default_options = {
         "shared": False,
-        "use_boost": "deprecated",
+        "fPIC": True,
         "with_boost": True,
-        "fPIC": True}
+    }
 
     def export_sources(self):
         export_conandata_patches(self)
@@ -37,22 +40,16 @@ class FruitConan(ConanFile):
         if self.settings.os == "Windows":
             self.options.rm_safe("fPIC")
 
-    def package_id(self):
-        del self.info.options.use_boost
-
     def configure(self):
         if self.options.shared:
             self.options.rm_safe("fPIC")
-        if self.options.use_boost != "deprecated":
-            self.output.warn("use_boost option is deprecated, use the option with_boost instead.")
-            self.options.with_boost = self.options.use_boost
 
     def layout(self):
         cmake_layout(self, src_folder="src")
 
     def requirements(self):
         if self.options.with_boost:
-            self.requires("boost/1.80.0")
+            self.requires("boost/1.83.0")
 
     def validate(self):
         if self.settings.compiler.cppstd:
@@ -103,6 +100,9 @@ class FruitConan(ConanFile):
         tc.variables["CMAKE_CXX_STANDARD"] = 11
         tc.cache_variables["CMAKE_POLICY_DEFAULT_CMP0077"] = "NEW"
         tc.cache_variables["CMAKE_POLICY_DEFAULT_CMP0091"] = "NEW"
+        tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
+        if Version(self.version) > "3.7.1": # pylint: disable=conan-unreachable-upper-version
+            raise ConanException("CMAKE_POLICY_VERSION_MINIMUM hardcoded to 3.5, check if new version supports CMake 4")
         tc.generate()
         tc = CMakeDeps(self)
         tc.generate()

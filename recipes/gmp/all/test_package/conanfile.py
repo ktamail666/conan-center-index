@@ -18,7 +18,6 @@ class TestPackageConan(ConanFile):
     def generate(self):
         tc = CMakeToolchain(self)
         tc.variables["ENABLE_CXX"] = self.dependencies["gmp"].options.enable_cxx
-        tc.variables["TEST_PIC"] = "fPIC" in self.dependencies["gmp"].options and self.dependencies["gmp"].options.fPIC
         tc.generate()
 
     def build(self):
@@ -28,8 +27,7 @@ class TestPackageConan(ConanFile):
 
     def test(self):
         if can_run(self):
-            bin_path = os.path.join(self.cpp.build.bindirs[0], "test_package")
-            self.run(bin_path, env="conanrun")
-            if self.options["gmp"].enable_cxx:
-                bin_path = os.path.join(self.cpp.build.bindirs[0], "test_package_cpp")
-                self.run(bin_path, env="conanrun")
+            bin_path = self.cpp.build.bindirs[0]
+            self.run(os.path.join(bin_path, "test_package"), env="conanrun")
+            if self.dependencies['gmp'].options.enable_cxx:
+                self.run(os.path.join(bin_path, "test_package_cpp"), env="conanrun")

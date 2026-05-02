@@ -1,0 +1,4 @@
+sources:
+  "4.0.2":
+    url: "https://github.com/ngcpp/proxy/archive/refs/tags/4.0.2.tar.gz"
+    sha256: "0cd53cf2bf44a6a5802f80700fab774bd47311d5074f2c4a65cc3caffa4e64e6"

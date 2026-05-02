@@ -1,21 +1,23 @@
 from conan import ConanFile
-from conan.errors import ConanInvalidConfiguration
+from conan.errors import ConanInvalidConfiguration, ConanException
 from conan.tools.build import cross_building
 from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout
-from conan.tools.files import apply_conandata_patches, copy, get, rmdir
+from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get, rmdir
+from conan.tools.scm import Version
 import os
 
-required_conan_version = ">=1.50.0"
+required_conan_version = ">=2.1"
 
 
 class DiscountConan(ConanFile):
     name = "discount"
     description = "DISCOUNT is a implementation of John Gruber & Aaron Swartz's Markdown markup language."
     license = "BSD-3-Clause"
-    topics = ("discount", "markdown")
+    topics = ("markdown",)
     homepage = "http://www.pell.portland.or.us/~orc/Code/discount"
     url = "https://github.com/conan-io/conan-center-index"
 
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -27,8 +29,7 @@ class DiscountConan(ConanFile):
     }
 
     def export_sources(self):
-        for p in self.conan_data.get("patches", {}).get(self.version, []):
-            copy(self, p["patch_file"], self.recipe_folder, self.export_sources_folder)
+        export_conandata_patches(self)
 
     def config_options(self):
         if self.settings.os == "Windows":
@@ -36,26 +37,19 @@ class DiscountConan(ConanFile):
 
     def configure(self):
         if self.options.shared:
-            del self.options.fPIC
-        try:
-            del self.settings.compiler.libcxx
-        except Exception:
-            pass
-        try:
-            del self.settings.compiler.cppstd
-        except Exception:
-            pass
+            self.options.rm_safe("fPIC")
+        self.settings.rm_safe("compiler.cppstd")
+        self.settings.rm_safe("compiler.libcxx")
+
+    def layout(self):
+        cmake_layout(self, src_folder="src")
 
     def validate(self):
         if hasattr(self, "settings_build") and cross_building(self):
             raise ConanInvalidConfiguration("discount doesn't support cross-build yet")
 
-    def layout(self):
-        cmake_layout(self, src_folder="src")
-
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         tc = CMakeToolchain(self)
@@ -66,6 +60,9 @@ class DiscountConan(ConanFile):
         tc.variables["CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS"] = True
         # Relocatable shared lib on Macos
         tc.cache_variables["CMAKE_POLICY_DEFAULT_CMP0042"] = "NEW"
+        tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
+        if Version(self.version) > "2.2.7": # pylint: disable=conan-unreachable-upper-version
+            raise ConanException("CMAKE_POLICY_VERSION_MINIMUM hardcoded to 3.5, check if new version supports CMake 4")
         tc.generate()
 
     def build(self):
@@ -86,11 +83,4 @@ class DiscountConan(ConanFile):
         self.cpp_info.set_property("pkg_config_name", "libmarkdown")
         # TODO: back to global scope in conan v2 once cmake_find_package_* & pkg_config generators removed
         self.cpp_info.components["_discount"].libs = ["markdown"]
-
-        # TODO: to remove in conan v2 once cmake_find_package_* & pkg_config generators removed
-        self.cpp_info.names["cmake_find_package"] = "discount"
-        self.cpp_info.names["cmake_find_package_multi"] = "discount"
-        self.cpp_info.names["pkg_config"] = "libmarkdown"
-        self.cpp_info.components["_discount"].names["cmake_find_package"] = "libmarkdown"
-        self.cpp_info.components["_discount"].names["cmake_find_package_multi"] = "libmarkdown"
         self.cpp_info.components["_discount"].set_property("pkg_config_name", "libmarkdown")

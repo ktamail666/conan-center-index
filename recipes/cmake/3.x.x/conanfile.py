@@ -1,15 +1,17 @@
 from conan import ConanFile
 from conan.tools.files import chdir, copy, rmdir, get, save, load
-from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout
+from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout, CMakeDeps
 from conan.tools.gnu import Autotools, AutotoolsToolchain, AutotoolsDeps
 from conan.tools.layout import basic_layout
 from conan.tools.build import build_jobs, cross_building, check_min_cppstd
 from conan.tools.scm import Version
+from conan.tools.microsoft import is_msvc
 from conan.errors import ConanInvalidConfiguration
+
 import os
 import json
 
-required_conan_version = ">=1.50.0"
+required_conan_version = ">=1.51.0"
 
 class CMakeConan(ConanFile):
     name = "cmake"
@@ -35,15 +37,13 @@ class CMakeConan(ConanFile):
             self.options.with_openssl = False
 
     def requirements(self):
-        if self.options.with_openssl:
-            self.requires("openssl/1.1.1s")
+        if self.options.get_safe("with_openssl", default=False):
+            self.requires("openssl/[>=1.1 <4]")
+        self.requires("zlib/[>=1.2.11 <2]")
 
-    def validate(self):
+    def validate_build(self):
         if self.settings.os == "Windows" and self.options.bootstrap:
             raise ConanInvalidConfiguration("CMake does not support bootstrapping on Windows")
-
-        if self.settings.os == "Macos" and self.settings.arch == "x86":
-            raise ConanInvalidConfiguration("CMake does not support x86 for macOS")
 
         minimal_cpp_standard = "11"
         if self.settings.get_safe("compiler.cppstd"):
@@ -70,6 +70,10 @@ class CMakeConan(ConanFile):
             raise ConanInvalidConfiguration(
                 f"{self.name} requires a compiler that supports at least C++{minimal_cpp_standard}")
 
+    def validate(self):
+        if self.settings.os == "Macos" and self.settings.arch == "x86":
+            raise ConanInvalidConfiguration("CMake does not support x86 for macOS")
+
     def layout(self):
         if self.options.bootstrap:
             basic_layout(self, src_folder="src")
@@ -94,6 +98,7 @@ class CMakeConan(ConanFile):
                     openssl = self.dependencies["openssl"]
                     bootstrap_cmake_options.append("-DCMAKE_USE_OPENSSL=ON")
                     bootstrap_cmake_options.append(f'-DOPENSSL_USE_STATIC_LIBS={"FALSE" if openssl.options.shared else "TRUE"}')
+                    bootstrap_cmake_options.append(f'-DOPENSSL_ROOT_DIR={openssl.package_path}')
                 else:
                     bootstrap_cmake_options.append("-DCMAKE_USE_OPENSSL=OFF")
             save(self, "bootstrap_args", json.dumps({"bootstrap_cmake_options": ' '.join(arg for arg in bootstrap_cmake_options)}))
@@ -112,7 +117,18 @@ class CMakeConan(ConanFile):
             if cross_building(self):
                 tc.variables["HAVE_POLL_FINE_EXITCODE"] = ''
                 tc.variables["HAVE_POLL_FINE_EXITCODE__TRYRUN_OUTPUT"] = ''
+            # TODO: Remove after fixing https://github.com/conan-io/conan-center-index/issues/13159
+            # C3I workaround to force CMake to choose the highest version of
+            # the windows SDK available in the system
+            if is_msvc(self) and not self.conf.get("tools.cmake.cmaketoolchain:system_version"):
+                tc.variables["CMAKE_SYSTEM_VERSION"] = "10.0"
+            tc.cache_variables["CMAKE_USE_SYSTEM_ZLIB"] = True
             tc.generate()
+            tc = CMakeDeps(self)
+            # CMake try_compile failure: https://github.com/conan-io/conan-center-index/pull/16073#discussion_r1110037534
+            tc.set_property("openssl", "cmake_find_mode", "module")
+            tc.generate()
+
 
     def build(self):
         if self.options.bootstrap:

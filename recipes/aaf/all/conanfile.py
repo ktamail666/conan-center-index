@@ -2,6 +2,7 @@ from conan import ConanFile
 from conan.tools.apple import fix_apple_shared_install_name, is_apple_os
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
 from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get
+from conan.tools.microsoft import is_msvc
 import os
 
 required_conan_version = ">=1.52.0"
@@ -17,6 +18,7 @@ class AafConan(ConanFile):
     )
     topics = ("multimedia", "crossplatform")
     license = "AAFSDKPSL-2.0"
+    package_type = "static-library"
 
     settings = "os", "arch", "compiler", "build_type"
     options = {
@@ -33,10 +35,10 @@ class AafConan(ConanFile):
         cmake_layout(self, src_folder="src")
 
     def requirements(self):
-        self.requires("expat/2.5.0")
+        self.requires("expat/[>=2.6.2 <3]")
         self.requires("libjpeg/9e")
         if self.settings.os in ("FreeBSD", "Linux"):
-            self.requires("libuuid/1.0.3")
+            self.requires("util-linux-libuuid/2.39")
 
     def source(self):
         get(self, **self.conan_data["sources"][self.version], strip_root=True)
@@ -45,7 +47,7 @@ class AafConan(ConanFile):
         tc = CMakeToolchain(self)
         if is_apple_os(self):
             tc.cache_variables["PLATFORM"] = "apple-clang"
-        elif self.settings.compiler == "Visual Studio":
+        elif is_msvc(self):
             tc.cache_variables["PLATFORM"] = "vc"
         else:
             tc.cache_variables["PLATFORM"] = str(self.settings.os)
@@ -58,6 +60,7 @@ class AafConan(ConanFile):
         tc.cache_variables["AAF_NO_STRUCTURED_STORAGE"] = not self.options.structured_storage
         jpeg_res_dirs = ";".join([p.replace("\\", "/") for p in self.dependencies["libjpeg"].cpp_info.aggregated_components().resdirs])
         tc.variables["JPEG_RES_DIRS"] = jpeg_res_dirs
+        tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
         tc.generate()
         deps = CMakeDeps(self)
         deps.generate()
@@ -83,9 +86,12 @@ class AafConan(ConanFile):
     def package_info(self):
         if self.settings.os == "Windows":
             suffix = "D" if self.settings.build_type == "Debug" else ""
-            self.cpp_info.libs = [f"AAF{suffix}", f"AAFIID{suffix}", "AAFCOAPI"]
+            self.cpp_info.libs = [f"AAF{suffix}", f"AAFIID{suffix}"]
+            # The static library loads a DLL at runtime, on Windows it needs to be able
+            # to find it in PATH, see https://aaf.sourceforge.net/AAFProjectFAQ.html
+            self.runenv_info.prepend_path("PATH", os.path.join(self.package_folder, "bin"))
         else:
-            self.cpp_info.libs = ["aaflib", "aafiid", "com-api"]
+            self.cpp_info.libs = ["aaflib", "aafiid"]
         if self.settings.os in ("FreeBSD", "Linux"):
             self.cpp_info.system_libs = ["dl"]
         elif is_apple_os(self):

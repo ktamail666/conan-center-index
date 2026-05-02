@@ -1,9 +1,13 @@
 from conan import ConanFile
-from conan.tools import files
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
+from conan.tools.files import (
+    apply_conandata_patches, collect_libs, copy, export_conandata_patches, get,
+    replace_in_file, rmdir
+)
+from conan.tools.scm import Version
 import os
 
-required_conan_version = ">=1.53.0"
+required_conan_version = ">=2.1"
 
 
 class CppRestSDKConan(ConanFile):
@@ -12,9 +16,9 @@ class CppRestSDKConan(ConanFile):
                   "C++ API design"
     url = "https://github.com/conan-io/conan-center-index"
     homepage = "https://github.com/Microsoft/cpprestsdk"
-    topics = ("cpprestsdk", "rest", "client", "http", "https")
+    topics = ("rest", "client", "http", "https")
     license = "MIT"
-
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -36,7 +40,7 @@ class CppRestSDKConan(ConanFile):
     }
 
     def export_sources(self):
-        files.export_conandata_patches(self)
+        export_conandata_patches(self)
 
     def config_options(self):
         if self.settings.os == "Windows":
@@ -50,23 +54,19 @@ class CppRestSDKConan(ConanFile):
         if self.options.shared:
             self.options.rm_safe("fPIC")
 
-    def requirements(self):
-        self.requires("boost/1.80.0")
-        self.requires("openssl/1.1.1s")
-        if self.options.with_compression:
-            self.requires("zlib/1.2.13")
-        if self.options.with_websockets:
-            self.requires("websocketpp/0.8.2")
-
-    def package_id(self):
-        self.info.requires["boost"].minor_mode()
-
     def layout(self):
         cmake_layout(self, src_folder="src")
 
+    def requirements(self):
+        self.requires("boost/1.83.0", transitive_headers=True)
+        self.requires("openssl/[>=1.1 <4]", transitive_headers=True, transitive_libs=True)
+        if self.options.with_compression:
+            self.requires("zlib/[>=1.2.11 <2]")
+        if self.options.with_websockets:
+            self.requires("websocketpp/0.8.2")
+
     def source(self):
-        files.get(self, **self.conan_data["sources"][self.version],
-                  destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         tc = CMakeToolchain(self)
@@ -84,28 +84,30 @@ class CppRestSDKConan(ConanFile):
             tc.variables["CPPREST_HTTP_CLIENT_IMPL"] = self.options.http_client_impl
         if self.options.get_safe("http_listener_impl"):
             tc.variables["CPPREST_HTTP_LISTENER_IMPL"] = self.options.http_listener_impl
+        if Version(self.version) <= "2.10.15":
+            tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
         tc.generate()
         deps = CMakeDeps(self)
         deps.generate()
 
     def _patch_clang_libcxx(self):
         if self.settings.compiler == 'clang' and str(self.settings.compiler.libcxx) in ['libstdc++', 'libstdc++11']:
-            files.replace_in_file(self, os.path.join(self.source_folder, 'Release', 'CMakeLists.txt'),
+            replace_in_file(self, os.path.join(self.source_folder, 'Release', 'CMakeLists.txt'),
                                   'libc++', 'libstdc++')
 
     def build(self):
-        files.apply_conandata_patches(self)
+        apply_conandata_patches(self)
         self._patch_clang_libcxx()
         cmake = CMake(self)
         cmake.configure()
         cmake.build()
 
     def package(self):
-        files.copy(self, "license.txt", dst=os.path.join(self.package_folder, "licenses"), src=self.source_folder)
+        copy(self, "license.txt", dst=os.path.join(self.package_folder, "licenses"), src=self.source_folder)
         cmake = CMake(self)
         cmake.install()
-        files.rmdir(self, os.path.join(self.package_folder, "lib", "cmake"))
-        files.rmdir(self, os.path.join(self.package_folder, "lib", "cpprestsdk"))
+        rmdir(self, os.path.join(self.package_folder, "lib", "cmake"))
+        rmdir(self, os.path.join(self.package_folder, "lib", "cpprestsdk"))
 
     def package_info(self):
         self.cpp_info.set_property("cmake_file_name", "cpprestsdk")
@@ -113,14 +115,20 @@ class CppRestSDKConan(ConanFile):
         # cpprestsdk_boost_internal
         self.cpp_info.components["cpprestsdk_boost_internal"].set_property("cmake_target_name", "cpprestsdk::cpprestsdk_boost_internal")
         self.cpp_info.components["cpprestsdk_boost_internal"].includedirs = []
-        self.cpp_info.components["cpprestsdk_boost_internal"].requires = ["boost::boost"]
+        ## List of Boost components cpprestsdk depends on:
+        ## see https://github.com/microsoft/cpprestsdk/blob/v2.10.19/Release/cmake/cpprest_find_boost.cmake#L77-L106
+        self.cpp_info.components["cpprestsdk_boost_internal"].requires = ["boost::headers", "boost::system"]
+        if self.settings.os != "Windows":
+            self.cpp_info.components["cpprestsdk_boost_internal"].requires.extend(["boost::random", "boost::thread", "boost::filesystem", "boost::chrono", "boost::atomic"])
+        if self.settings.os != "Android":
+            self.cpp_info.components["cpprestsdk_boost_internal"].requires.extend(["boost::date_time", "boost::regex"])
         # cpprestsdk_openssl_internal
         self.cpp_info.components["cpprestsdk_openssl_internal"].set_property("cmake_target_name", "cpprestsdk::cpprestsdk_openssl_internal")
         self.cpp_info.components["cpprestsdk_openssl_internal"].includedirs = []
         self.cpp_info.components["cpprestsdk_openssl_internal"].requires = ["openssl::openssl"]
         # cpprest
         self.cpp_info.components["cpprest"].set_property("cmake_target_name", "cpprestsdk::cpprest")
-        self.cpp_info.components["cpprest"].libs = files.collect_libs(self)
+        self.cpp_info.components["cpprest"].libs = collect_libs(self)
         self.cpp_info.components["cpprest"].requires = ["cpprestsdk_boost_internal", "cpprestsdk_openssl_internal"]
         if self.settings.os == "Linux":
             self.cpp_info.components["cpprest"].system_libs.append("pthread")

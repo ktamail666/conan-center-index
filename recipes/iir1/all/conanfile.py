@@ -1,11 +1,11 @@
 from conan import ConanFile
 from conan.tools.build import check_min_cppstd
 from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout
-from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get, rm, rmdir
+from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get, rm, rmdir, save
 from conan.tools.scm import Version
 import os
 
-required_conan_version = ">=1.52.0"
+required_conan_version = ">=2.1"
 
 
 class Iir1Conan(ConanFile):
@@ -20,6 +20,7 @@ class Iir1Conan(ConanFile):
     homepage = "https://github.com/berndporr/iir1"
     topics = ("dsp", "signals", "filtering")
 
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -47,30 +48,34 @@ class Iir1Conan(ConanFile):
 
     def configure(self):
         if self.options.shared:
-            try:
-                del self.options.fPIC
-            except Exception:
-                pass
+            self.options.rm_safe("fPIC")
 
     def layout(self):
         cmake_layout(self, src_folder="src")
 
     def validate(self):
-        if self.info.settings.compiler.get_safe("cppstd"):
+        if self.settings.compiler.get_safe("cppstd"):
             check_min_cppstd(self, self._min_cppstd)
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         tc = CMakeToolchain(self)
         if self.options.get_safe("noexceptions"):
             tc.preprocessor_definitions["IIR1_NO_EXCEPTIONS"] = "1"
+        if Version(self.version) < "1.9.4":
+            tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
         tc.generate()
 
-    def build(self):
+    def _patch_sources(self):
         apply_conandata_patches(self)
+        # Disable test and demo subdirs
+        save(self, os.path.join(self.source_folder, "test", "CMakeLists.txt"), "")
+        save(self, os.path.join(self.source_folder, "demo", "CMakeLists.txt"), "")
+
+    def build(self):
+        self._patch_sources()
         cmake = CMake(self)
         cmake.configure()
         cmake.build()
@@ -96,10 +101,6 @@ class Iir1Conan(ConanFile):
         self.cpp_info.components["iir"].libs = [name]
         if self.options.get_safe("noexceptions"):
             self.cpp_info.components["iir"].defines.append("IIR1_NO_EXCEPTIONS")
-
-        # TODO: to remove in conan v2
-        self.cpp_info.names["cmake_find_package"] = "iir"
-        self.cpp_info.names["cmake_find_package_multi"] = "iir"
-        self.cpp_info.components["iir"].names["cmake_find_package"] = name
-        self.cpp_info.components["iir"].names["cmake_find_package_multi"] = name
+        if self.settings.os in ["Linux", "FreeBSD"]:
+            self.cpp_info.components["iir"].system_libs.append("m")
         self.cpp_info.components["iir"].set_property("cmake_target_name", f"iir::{name}")
